@@ -14,7 +14,7 @@ edition = "2018"
 [features]
 default = ["thruster_async_await"]
 thruster_async_await = [
-  "thruster-core/thruster_async_await"
+  "thruster-core/thruster_async_await",
 ]
 thruster_error_handling = [
   "thruster-core/thruster_error_handling"

@@ -5,29 +5,28 @@ use std::time::Instant;
 use thruster::{MiddlewareNext, MiddlewareReturnValue, MiddlewareResult};
 use thruster::{App, BasicContext as Ctx, Request, map_try};
 use thruster::server::Server;
-use thruster::errors::ThrusterError as Error;
+use thruster::errors::{Error, ThrusterError};
 use thruster::ThrusterServer;
 use thruster::thruster_proc::{async_middleware, middleware_fn};
 
 trait ErrorSet {
-  fn parsing_error(context: Ctx) -> Error<Ctx>;
+  fn parsing_error(context: Ctx) -> Box<dyn Error<Ctx>>;
 }
 
 impl ErrorSet for Error<Ctx> {
-  fn parsing_error(context: Ctx) -> Error<Ctx> {
-    Error {
+  fn parsing_error(context: Ctx) -> Box<dyn Error<Ctx>> {
+    Box::new(ThrusterError {
       context,
       message: "Parsing failure!".to_string(),
       status: 400
-    }
+    })
   }
 }
 
 #[middleware_fn]
-async fn profiling(mut context: Ctx, next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+async fn profiling(context: Ctx, next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
   let start_time = Instant::now();
-
-  context = next(context).await?;
+  let context = next(context).await?;
 
   let elapsed_time = start_time.elapsed();
   println!("[{}μs] {} -- {}",
@@ -47,14 +46,16 @@ async fn add_one(context: Ctx, next: MiddlewareNext<Ctx>) ->  MiddlewareResult<C
 }
 
 #[middleware_fn]
-async fn plaintext(mut context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+async fn plaintext(context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+  let mut context = context;
   let val = "Hello, World!";
   context.body(val);
   Ok(context)
 }
 
 #[middleware_fn]
-async fn error(mut context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+async fn error(context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+  let mut context = context;
   let res = "Hello, world".parse::<u32>();
   let non_existent_param = map_try!(res, Err(_) => Error::parsing_error(context));
 
@@ -70,10 +71,15 @@ async fn json_error_handler(context: Ctx, next: MiddlewareNext<Ctx>) -> Middlewa
   let ctx = match res {
     Ok(val) => val,
     Err(e) => {
-      let mut context = e.context;
-      context.body(&format!("{{\"message\": \"{}\",\"success\":false}}", e.message));
-      context.status(e.status);
-      context
+      match e.downcast::<ThrusterError<Ctx>>() {
+        Ok(e) => {
+          let mut context = e.context;
+          context.body(&format!("{{\"message\": \"{}\",\"success\":false}}", e.message));
+          context.status(e.status);
+          context
+        },
+        Err(e) => e.build_context(),
+      }
     }
   };
 
@@ -81,7 +87,9 @@ async fn json_error_handler(context: Ctx, next: MiddlewareNext<Ctx>) -> Middlewa
 }
 
 #[middleware_fn]
-async fn four_oh_four(mut context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+async fn four_oh_four(context: Ctx, _next: MiddlewareNext<Ctx>) -> MiddlewareResult<Ctx> {
+  let mut context = context;
+
   context.status(404);
   context.body("Whoops! That route doesn't exist!");
   Ok(context)
